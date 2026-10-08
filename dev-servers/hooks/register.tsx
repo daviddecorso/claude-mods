@@ -61,8 +61,8 @@ async function logEvent($: $, event: Record<string, unknown>) {
   }
 }
 
-function text(body: string) {
-  return { result: { content: [{ type: 'text' as const, text: body }], isError: false } }
+function text(body: string, isError = false) {
+  return { result: { content: [{ type: 'text' as const, text: body }], isError } }
 }
 
 function names() {
@@ -467,23 +467,23 @@ export const register: Register = on => {
   on('tool.call', { tool: 'mcp__dev-servers__dev_list' }, async $ => {
     void logEvent($, { event: 'tool', tool: 'dev_list' })
     return text(await list($))
-  })
+  }).catch(() => text('dev_list failed', true))
   on('tool.call', { tool: 'mcp__dev-servers__dev_start' }, async ($, e) => {
     void logEvent($, { event: 'tool', tool: 'dev_start', service: e.name })
     return text(await start($, String(e.name ?? '')))
-  })
+  }).catch(() => text('dev_start failed', true))
   on('tool.call', { tool: 'mcp__dev-servers__dev_stop' }, async ($, e) => {
     void logEvent($, { event: 'tool', tool: 'dev_stop', service: e.name })
     return text(await stop($, String(e.name ?? '')))
-  })
+  }).catch(() => text('dev_stop failed', true))
   on('tool.call', { tool: 'mcp__dev-servers__dev_restart' }, async ($, e) => {
     void logEvent($, { event: 'tool', tool: 'dev_restart', service: e.name })
     return text(await restart($, String(e.name ?? '')))
-  })
+  }).catch(() => text('dev_restart failed', true))
   on('tool.call', { tool: 'mcp__dev-servers__dev_logs' }, async ($, e) => {
     void logEvent($, { event: 'tool', tool: 'dev_logs', service: e.name, tail: e.tail, grep: e.grep, level: e.level })
     return text(await logsFor($, e))
-  })
+  }).catch(() => text('dev_logs failed', true))
 
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const deny = bashDenial(e.command)

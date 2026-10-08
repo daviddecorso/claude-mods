@@ -58,6 +58,8 @@ A pane for a per-repo prompt queue kept in `<repo>/.queue/` (shared across workt
 
 Run a mod from a working copy with `claude --plugin-dir ./<mod>`. Check it with `claude plugin validate ./<mod>` and `claude plugin test ./<mod>`.
 
+Each mod's `tsconfig.json` extends `.claude-plugin/types/tsconfig.json`, which Claude Code generates the first time it loads the mod. On a fresh clone, run `claude --plugin-dir ./<mod>` once before type-checking.
+
 ## License
 
 MIT
