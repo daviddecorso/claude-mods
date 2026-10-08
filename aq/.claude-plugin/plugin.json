@@ -1,0 +1,7 @@
+{
+  "name": "aq",
+  "version": "0.1.0",
+  "author": { "name": "David DeCorso" },
+  "description": "Pane for the per-repo aq prompt queue: pick items, batch them into the prompt box, queue drafts, and let Claude queue follow-ups",
+  "types": "./types/index.d.ts"
+}

@@ -1,0 +1,15 @@
+{
+  "name": "shell-edit-guard",
+  "version": "0.1.0",
+  "author": { "name": "David DeCorso" },
+  "description": "Blocks Bash commands that write files (inline scripts, sed -i, redirects, tee) and points the model at Edit/Write instead",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "extraAllowed": {
+      "type": "string",
+      "title": "Extra allowed commands",
+      "description": "A regex; Bash commands matching it are never blocked (e.g. ^node scripts/gen-)",
+      "default": ""
+    }
+  }
+}

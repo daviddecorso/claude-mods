@@ -1,0 +1,7 @@
+{
+  "name": "dev-servers",
+  "version": "0.1.0",
+  "author": { "name": "David DeCorso" },
+  "description": "Runs each repo's dev servers as named services on fixed ports, with a pane, filtered log reads and start/stop tools for the model",
+  "types": "./types/index.d.ts"
+}

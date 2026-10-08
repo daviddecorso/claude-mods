@@ -1,0 +1,11 @@
+{
+  "name": "claude-mods",
+  "owner": { "name": "David DeCorso" },
+  "description": "Function-hook plugins for Claude Code: a shell-write guard, dev-server management, agy/Jules plan handoff and a prompt queue",
+  "plugins": [
+    { "name": "shell-edit-guard", "source": "./shell-edit-guard" },
+    { "name": "dev-servers", "source": "./dev-servers" },
+    { "name": "handoff", "source": "./handoff" },
+    { "name": "aq", "source": "./aq" }
+  ]
+}
