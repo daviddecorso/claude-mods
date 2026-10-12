@@ -120,7 +120,6 @@ export const register: Register = (on, options) => {
       cwd: await $.session.cwd(),
       command: command.slice(0, 400),
     })
-    $.ui.status(`edit-guard: blocked a shell write${verdict.targets[0] ? ` to ${verdict.targets[0]}` : ''}`)
 
     if (isCapped) {
       return {

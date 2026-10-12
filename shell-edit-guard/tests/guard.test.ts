@@ -90,7 +90,6 @@ describe('hook', () => {
   test('denies a shell edit, honours allow-once, then caps retries', async ($, on) => {
     let ran = 0
     on('session.cwd', async () => ({ value: CWD }))
-    on('ui.status', async () => ({ value: undefined }))
     on('tool.call', { tool: 'Bash' }, async () => {
       ran += 1
       return { result: { stdout: '', stderr: '', interrupted: false } }
@@ -123,7 +122,6 @@ describe('hook', () => {
     mock.env(on, { HOME: '/home/me' })
     on('session.id', async () => ({ value: 'sess-1' }))
     on('session.cwd', async () => ({ value: CWD }))
-    on('ui.status', async () => ({ value: undefined }))
     on('process.run', async (_$, e) => {
       appended.push({ path: e.argv.at(-1)!, line: JSON.parse(e.init?.stdin ?? '{}') })
       return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
