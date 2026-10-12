@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, HookStream, ProcessSpawnChunk, ProcessSpawnResult, Register, Timer } from 'claude-code'
 
-import type { JulesJob, Plan, Progress, Run } from '../types'
+import type { Finding, JulesJob, Plan, Progress, Review, Run } from '../types'
 import { applyLine, emptyProgress, splitLines } from './agy'
 import type { JulesActivity, JulesSession } from './jules'
 import {
@@ -51,6 +51,7 @@ const JULES_TOOL_DESCRIPTION = [
 
 const plan = atom({ plugin: 'handoff', key: 'plan' } as const, null as Plan | null)
 const run = atom({ plugin: 'handoff', key: 'run' } as const, null as Run | null)
+const reviewResult = atom({ plugin: 'handoff', key: 'review' } as const, null as Review | null)
 const isBandHidden = atom({ plugin: 'handoff', key: 'isBandHidden' } as const, false)
 const julesJobs = atom({ plugin: 'handoff', key: 'julesJobs' } as const, [] as JulesJob[])
 
@@ -86,18 +87,40 @@ function quietNote(progress: Progress, now: number): string {
   return quiet >= QUIET_SHOW_MS ? ` · quiet ${duration(quiet)}` : ''
 }
 
+const COMMAND_RULE = "If a command runs longer than 5 minutes, stop it, don't retry it, and list it as a deviation."
+
 function agyPrompt(path: string): string {
   return [
     `Implement @${path} exactly as written. If you must deviate, do the minimum and list every deviation in your final message. Don't refactor anything the plan doesn't mention.`,
-    "If a command runs longer than 5 minutes, stop it, don't retry it, and list it as a deviation.",
+    COMMAND_RULE,
   ].join(' ')
+}
+
+function fixPrompt(planPath: string, fixesPath: string): string {
+  return [
+    `Fix the review findings in @${fixesPath} for the work done from @${planPath}.`,
+    "Change only what each finding needs; if you disagree with one, skip it and say why in your final message.",
+    COMMAND_RULE,
+  ].join(' ')
+}
+
+function fixesMarkdown(target: Plan, findings: Finding[]): string {
+  const items = findings.map((finding, i) => {
+    const where = finding.line === undefined ? finding.file : `${finding.file}:${finding.line}`
+    const category = finding.category ? ` (${finding.category})` : ''
+    return `${i + 1}. \`${where}\`${category}: ${finding.summary}\n   ${finding.failure_scenario}`
+  })
+  return [`# Review findings for ${target.slug}`, `From reviewing the work against ${target.path}.`, ...items].join('\n\n') + '\n'
 }
 
 function reviewPrompt(target: Plan, current: Run | null): string {
   const parts = [
-    `Use the handoff:plan-diff-review skill to review what agy implemented against ${target.path}.`,
+    `Use the handoff:plan-diff-review skill to review what agy implemented against ${target.path}. Report with ReportFindings.`,
     `The diff is everything since ${target.baseRev.slice(0, 12)}: \`git diff ${target.baseRev}\` plus untracked files from \`git status\`.`,
   ]
+  if (current?.fixesPath) {
+    parts.push(`This run, agy was fixing the findings in ${current.fixesPath}. Check each one is resolved, and report what is still open plus anything new.`)
+  }
   if (target.dirtyAtStart.length > 0) {
     parts.push(`These files already had uncommitted changes before the handoff, so not all of their diff is agy's: ${target.dirtyAtStart.join(', ')}.`)
   }
@@ -140,6 +163,7 @@ async function capturePlan($: $, absolute: string): Promise<Plan | undefined> {
   }
   await update($, plan, () => captured)
   await update($, run, () => null)
+  await update($, reviewResult, () => null)
   await update($, isBandHidden, () => false)
   void logEvent($, { event: 'plan', slug: captured.slug, root, dirtyAtStart: captured.dirtyAtStart.length, target: captured.target })
 
@@ -265,34 +289,38 @@ async function pumpAgent($: $, current: Agent, target: Plan) {
   $.ui.toast(`agy ${outcome === 'done' ? 'finished' : outcome}: ${finished?.progress.files.length ?? 0} files changed`)
   if (outcome !== 'stopped') {
     void logEvent($, { event: 'review', slug: target.slug, trigger: 'auto' })
-    await $.prompt.submit({ text: reviewPrompt(target, finished) })
+    await update($, reviewResult, () => ({ findings: null }))
+    void $.prompt.submit({ text: reviewPrompt(target, finished) })
   }
 }
 
-async function runHeadless($: $): Promise<string> {
+async function runHeadless($: $, fixesPath: string | null = null): Promise<string> {
   const target = await read($, plan)
   if (!target) return 'No plan to hand off. Run /handoff first.'
   if (agent) return 'agy is already running.'
 
+  const prompt = fixesPath ? fixPrompt(target.path, fixesPath) : agyPrompt(target.path)
   // setpgrp puts agy at the head of its own process group, so killing the group reaches the servers and test runners it starts.
   const stream = $.process.spawn({
     argv: [
       '/usr/bin/perl', '-e', `$| = 1; setpgrp(0, 0); print "${PID_MARK}$$\\n"; exec @ARGV or die "exec: $!\\n"`,
-      'agy', '-p', agyPrompt(target.path), '--add-dir', target.root, '--mode', 'accept-edits', '--output-format', 'stream-json',
+      'agy', '-p', prompt, '--add-dir', target.root, '--mode', 'accept-edits', '--output-format', 'stream-json',
     ],
     cwd: target.root,
     env: { CI: '1' },
   })
   const current: Agent = { stream, hasExited: false, isStallWarned: false, abandon: () => {} }
   agent = current
-  void logEvent($, { event: 'run-start', mode: 'headless', slug: target.slug })
+  void logEvent($, { event: 'run-start', mode: 'headless', slug: target.slug, fixes: fixesPath !== null })
   const now = await $.clock.now()
-  await update($, run, (): Run => ({ mode: 'headless', startedAt: now, progress: emptyProgress(now), changedFiles: 0, pid: null }))
+  await update($, run, (): Run => ({ mode: 'headless', startedAt: now, progress: emptyProgress(now), changedFiles: 0, pid: null, fixesPath }))
+  await update($, reviewResult, () => null)
   current.watchdog = $.clock.every(WATCH_MS, () => void watchAgent($, current))
   void pumpAgent($, current, target)
   await $.ui.open({ id: PANE, title: `agy · ${target.slug}` })
 
-  return `agy is implementing ${target.path} headless; the review starts when it exits.`
+  const task = fixesPath ? `fixing the findings in ${fixesPath}` : `implementing ${target.path}`
+  return `agy is ${task} headless; the review starts when it exits.`
 }
 
 async function stopAgent($: $): Promise<string> {
@@ -334,22 +362,44 @@ async function countChanged($: $, target: Plan) {
   $.ui.status(`agy -i: ${files.size} files changed since handoff`)
 }
 
-async function handOffInteractive($: $, surface?: Parameters<$['ui']['copy']>[0]['surface']): Promise<string> {
+type Surface = Parameters<$['ui']['copy']>[0]['surface']
+
+async function handOffInteractive($: $, surface?: Surface, fixesPath: string | null = null): Promise<string> {
   const target = await read($, plan)
   if (!target) return 'No plan to hand off. Run /handoff first.'
 
-  const command = `handoff ${target.slug}`
-  const copied = await $.ui.copy({ text: command, surface })
-  void logEvent($, { event: 'run-start', mode: 'interactive', slug: target.slug })
+  const text = fixesPath ? fixPrompt(target.path, fixesPath) : `handoff ${target.slug}`
+  const copied = await $.ui.copy({ text, surface })
+  void logEvent($, { event: 'run-start', mode: 'interactive', slug: target.slug, fixes: fixesPath !== null })
   const now = await $.clock.now()
-  await update($, run, (): Run => ({ mode: 'interactive', startedAt: now, progress: emptyProgress(now), changedFiles: 0, pid: null }))
+  await update($, run, (): Run => ({ mode: 'interactive', startedAt: now, progress: emptyProgress(now), changedFiles: 0, pid: null, fixesPath }))
+  await update($, reviewResult, () => null)
   poll?.cancel()
   poll = $.clock.every(POLL_MS, () => void countChanged($, target))
   await countChanged($, target)
 
+  if (fixesPath) {
+    return copied.isCopied
+      ? 'Copied the fix prompt. Paste it into agy -i; /handoff review when agy is done.'
+      : `Give agy -i this prompt, then /handoff review when it's done:\n\n${text}`
+  }
   return copied.isCopied
-    ? `Copied \`${command}\`. Run it in another terminal; /handoff review when agy is done.`
-    : `Run \`${command}\` in another terminal; /handoff review when agy is done.`
+    ? `Copied \`${text}\`. Run it in another terminal; /handoff review when agy is done.`
+    : `Run \`${text}\` in another terminal; /handoff review when agy is done.`
+}
+
+async function sendFixes($: $, mode: 'headless' | 'interactive', surface?: Surface): Promise<string> {
+  const target = await read($, plan)
+  const findings = (await read($, reviewResult))?.findings
+  if (!target || !findings || findings.length === 0) return 'No review findings to hand back.'
+  if (agent) return 'agy is already running.'
+
+  const fixesPath = `plans/fixes/${target.slug}.md`
+  await $.process.run(['mkdir', '-p', `${target.root}/plans/fixes`])
+  await $.fs.write(`${target.root}/${fixesPath}`, fixesMarkdown(target, findings))
+  void logEvent($, { event: 'fixes', slug: target.slug, findings: findings.length, mode })
+
+  return mode === 'headless' ? runHeadless($, fixesPath) : handOffInteractive($, surface, fixesPath)
 }
 
 async function review($: $): Promise<string> {
@@ -371,7 +421,8 @@ async function review($: $): Promise<string> {
     })
   }
   void logEvent($, { event: 'review', slug: target.slug, trigger: 'manual' })
-  await $.prompt.submit({ text: reviewPrompt(target, current) })
+  await update($, reviewResult, () => ({ findings: null }))
+  void $.prompt.submit({ text: reviewPrompt(target, current) })
 
   return `Reviewing against ${target.path}.`
 }
@@ -546,7 +597,7 @@ async function reviewJules($: $, session: string, trigger: 'auto' | 'manual'): P
   if (!job) return 'That Jules job is no longer tracked.'
   await updateJob($, session, current => ({ ...current, isReviewed: true }))
   void logEvent($, { event: 'review', mode: 'jules', slug: job.plan?.slug ?? null, title: job.title, trigger })
-  await $.prompt.submit({ text: julesReviewPrompt(job) })
+  void $.prompt.submit({ text: julesReviewPrompt(job) })
 
   return `Reviewing Jules's ${job.title}.`
 }
@@ -593,8 +644,8 @@ export const register: Register = on => {
     const started = await next(e)
     await $.command.register({
       name: 'handoff',
-      description: 'Hand the plan to agy or Jules: no args writes it with /handoff:plan-handoff; <slug>, review, stop, jules, jules-status',
-      argumentHint: '[<plan slug> | review | stop | jules | jules-status]',
+      description: 'Hand the plan to agy or Jules: no args writes it with /handoff:plan-handoff; <slug>, review, fix, stop, jules, jules-status',
+      argumentHint: '[<plan slug> | review | fix | stop | jules | jules-status]',
     })
     await $.tool.register({
       name: 'jules_delegate',
@@ -640,6 +691,23 @@ export const register: Register = on => {
     }).catch(($, e, next) => next(e))
   }
 
+  // Only a review this mod started is waiting; a ReportFindings from any other review is left alone.
+  on('tool.call', { tool: 'ReportFindings' }, async ($, e, next) => {
+    const result = await next(e)
+    if (result.deny === undefined && result.isError !== true && (await read($, reviewResult))?.findings === null) {
+      const findings: Finding[] = e.findings.map(({ file, line, summary, failure_scenario, category }) => ({
+        file,
+        line,
+        summary,
+        failure_scenario,
+        category,
+      }))
+      await update($, reviewResult, () => ({ findings }))
+      if (findings.length > 0) await update($, isBandHidden, () => false)
+    }
+    return result
+  }).catch(($, e, next) => next(e))
+
   on('tool.call', { tool: 'mcp__handoff__jules_delegate' }, async ($, e) => {
     try {
       return toolText(await delegate($, e))
@@ -652,6 +720,7 @@ export const register: Register = on => {
     const arg = e.args.trim()
     if (arg === 'review') return { text: await review($) }
     if (arg === 'stop') return { text: await stopAgent($) }
+    if (arg === 'fix') return { text: await sendFixes($, 'headless') }
     if (arg === 'headless') return { text: await runHeadless($) }
     if (arg === 'copy') return { text: await handOffInteractive($) }
     if (arg === 'jules') return { text: await sendPlanToJules($) }
@@ -661,9 +730,9 @@ export const register: Register = on => {
     }
     if (arg !== '') return { text: await findPlan($, arg) }
 
-    await $.prompt.submit({ text: '/handoff:plan-handoff' })
+    void $.prompt.submit({ text: '/handoff:plan-handoff' })
     return { text: 'Writing the plan with /handoff:plan-handoff; pick how to hand it off when it lands.' }
-  })
+  }).catch(($, e) => ({ text: `/handoff ${e.args.trim()} failed; see claude --debug for the error.` }))
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
@@ -671,11 +740,34 @@ export const register: Register = on => {
     const target = await read($, plan)
     const current = await read($, run)
     const jobs = await read($, julesJobs)
+    const findings = (await read($, reviewResult))?.findings ?? []
     const now = await $.clock.now()
 
     let planRow = null
     if (target && !(await read($, isBandHidden))) {
-      if (!current) {
+      if (findings.length > 0) {
+        planRow = (
+          <Box>
+            <Text>Review: </Text>
+            <Text bold>
+              {findings.length} finding{findings.length === 1 ? '' : 's'}{' '}
+            </Text>
+            <Text dimColor>on {target.slug} </Text>
+            <Button
+              key="fix-headless"
+              label="Fix headless"
+              variant="primary"
+              onPress={() => void sendFixes($, 'headless').then(text => $.ui.toast(text))}
+            />
+            <Button
+              key="fix-copy"
+              label="Copy fix for agy -i"
+              onPress={press => void sendFixes($, 'interactive', press.surface).then(text => $.ui.toast(text))}
+            />
+            <Button key="dismiss" label="×" plain onPress={() => dismiss($)} />
+          </Box>
+        )
+      } else if (!current) {
         const suggested = target.target ?? 'agy'
         planRow = (
           <Box>

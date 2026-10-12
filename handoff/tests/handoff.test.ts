@@ -77,6 +77,8 @@ type Fake = {
   isAgyAlive?: () => boolean
   runs?: string[]
   toasts?: string[]
+  spawns?: string[]
+  writes?: { path: string; text: string }[]
 }
 
 function fakeSession(on: On, submitted: string[], logged: Record<string, unknown>[] = [], repo: Fake = {}) {
@@ -84,6 +86,10 @@ function fakeSession(on: On, submitted: string[], logged: Record<string, unknown
   mock.env(on, { HOME: '/home/me' })
   on('tool.register', async (_$, e) => ({ value: { tool: e.name } }))
   on('fs.read', async () => ({ value: repo.planMarkdown ?? '# plan' }) as never)
+  on('fs.write', async (_$, e) => {
+    repo.writes?.push({ path: e.path, text: e.text })
+    return { value: undefined } as never
+  })
   on('session.id', async () => ({ value: 'sess-1' }))
   on('session.start', async (_$, e) => ({ cwd: e.cwd }))
   on('session.cwd', async () => ({ value: ROOT }))
@@ -116,7 +122,9 @@ function fakeSession(on: On, submitted: string[], logged: Record<string, unknown
   })
   on('process.spawn', async function* (_$, e) {
     expect(e.argv).toContain('agy')
-    expect(e.argv.join(' ')).toContain('Implement @plans/nfl-pickem.md exactly as written')
+    const args = e.argv.join(' ')
+    expect(args).toMatch(/Implement @plans\/nfl-pickem\.md exactly as written|Fix the review findings in @plans\/fixes\/nfl-pickem\.md/)
+    repo.spawns?.push(args)
     expect(e.env).toMatchObject({ CI: '1' })
     yield { stream: 'stdout' as const, text: '__AGYPID 777\n' }
     yield { stream: 'stdout' as const, text: (repo.agyLines ?? AGY_RUN).join('\n') + '\n' }
@@ -125,8 +133,18 @@ function fakeSession(on: On, submitted: string[], logged: Record<string, unknown
   })
   on('tool.call', { tool: 'Write' }, async () => ({ result: { type: 'create' as const, filePath: PLAN, content: '', structuredPatch: [], originalFile: null } }) as never)
   on('tool.call', { tool: 'Edit' }, async () => ({ result: { filePath: PLAN, oldString: 'a', newString: 'b', structuredPatch: [] } }) as never)
+  on('tool.call', { tool: 'ReportFindings' }, async (_$, e) => ({ result: { count: e.findings.length, findings: e.findings } }) as never)
 
   return clock
+}
+
+const FINDINGS = [
+  { file: 'src/a.ts', line: 12, summary: 'The empty list crashes.', failure_scenario: '[] → TypeError', category: 'correctness' },
+  { file: 'src/b.ts', summary: 'Step 3 was skipped.', failure_scenario: 'The plan asked for a retry; there is none.', category: 'gap' },
+]
+
+async function waitFor(isDone: () => boolean) {
+  for (let i = 0; i < 50 && !isDone(); i++) await new Promise<void>(resolve => setTimeout(resolve, 10))
 }
 
 const BAND = {
@@ -156,6 +174,56 @@ describe('engine', () => {
     expect(submitted[0]).toContain('Deviation: none.')
     expect(logged.map(l => l.event)).toEqual(['plan', 'run-start', 'run-end', 'review'])
     expect(logged[2]).toMatchObject({ outcome: 'done', files: 1, commands: 1 })
+    await band.unmount()
+  })
+
+  test("the review's findings go back to agy headless, and the fix run is reviewed against the same base", async ($, on) => {
+    const submitted: string[] = []
+    const logged: Record<string, unknown>[] = []
+    const spawns: string[] = []
+    const writes: { path: string; text: string }[] = []
+    fakeSession(on, submitted, logged, { spawns, writes })
+    await $.session.start({ cwd: ROOT, surface: null, isInteractive: true })
+    await $.tool.call({ tool: 'Write', file_path: PLAN, content: '# plan' })
+    const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    await band.press({ key: 'headless' })
+    await waitFor(() => submitted.length === 1)
+    expect(submitted[0]).toContain('ReportFindings')
+
+    await $.tool.call({ tool: 'ReportFindings', findings: FINDINGS } as never)
+    expect(await band.find({ type: 'Text', text: '2 findings' })).toBeDefined()
+    await band.press({ key: 'fix-headless' })
+    await waitFor(() => submitted.length === 2)
+
+    expect(writes).toHaveLength(1)
+    expect(writes[0]!.path).toBe(`${ROOT}/plans/fixes/nfl-pickem.md`)
+    expect(writes[0]!.text).toContain('`src/a.ts:12` (correctness): The empty list crashes.')
+    expect(writes[0]!.text).toContain('`src/b.ts` (gap): Step 3 was skipped.')
+    expect(spawns[1]).toContain('Fix the review findings in @plans/fixes/nfl-pickem.md for the work done from @plans/nfl-pickem.md')
+    expect(submitted[1]).toContain('agy was fixing the findings in plans/fixes/nfl-pickem.md')
+    expect(submitted[1]).toContain('git diff abc123def4567890')
+    expect(logged.map(l => l.event)).toEqual(['plan', 'run-start', 'run-end', 'review', 'fixes', 'run-start', 'run-end', 'review'])
+    expect(logged[5]).toMatchObject({ fixes: true })
+    expect(await band.find({ key: 'fix-headless' })).toBeUndefined()
+    await band.unmount()
+  })
+
+  test('findings from a review the mod did not start, or an empty report, offer no fix', async ($, on) => {
+    const submitted: string[] = []
+    fakeSession(on, submitted)
+    await $.session.start({ cwd: ROOT, surface: null, isInteractive: true })
+    await $.tool.call({ tool: 'Write', file_path: PLAN, content: '# plan' })
+    const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+
+    await $.tool.call({ tool: 'ReportFindings', findings: FINDINGS } as never)
+    expect(await band.find({ key: 'fix-headless' })).toBeUndefined()
+
+    await band.press({ key: 'headless' })
+    await waitFor(() => submitted.length === 1)
+    await $.tool.call({ tool: 'ReportFindings', findings: [] } as never)
+    expect(await band.find({ key: 'fix-headless' })).toBeUndefined()
+    const result = await $.command.run({ command: 'handoff', args: 'fix' } as never)
+    expect(result.text).toBe('No review findings to hand back.')
     await band.unmount()
   })
 
@@ -209,7 +277,7 @@ describe('engine', () => {
     const logged: Record<string, unknown>[] = []
     const clock = fakeSession(on, [], logged, { runs })
     // The session state as a reload leaves it: a run still marked running, and no module variable holding its process.
-    const orphan: Run = { mode: 'headless', startedAt: 0, progress: emptyProgress(0), changedFiles: 0, pid: 777 }
+    const orphan: Run = { mode: 'headless', startedAt: 0, progress: emptyProgress(0), changedFiles: 0, pid: 777, fixesPath: null }
     on('state.get', async (_$, e, next) => {
       const read = (await next(e)) as { value: { value?: unknown; version: number } }
       const isRun = (e as { key?: string }).key === 'run'

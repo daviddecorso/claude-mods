@@ -32,7 +32,7 @@ Finds each repo's dev servers (`dev*` package scripts and `wrangler dev`, for Vi
 
 ## handoff
 
-Hands a `plans/<slug>.md` plan to agy, the Antigravity CLI (headless with live progress, or copied for `agy -i`), or to Google's Jules (cloud PR), then starts a plan-vs-diff review when the work lands. Ships two skills: `plan-handoff` writes the plan with a recommended implementer, and `plan-diff-review` checks the result against it.
+Hands a `plans/<slug>.md` plan to agy, the Antigravity CLI (headless with live progress, or copied for `agy -i`), or to Google's Jules (cloud PR), then starts a plan-vs-diff review when the work lands. When an agy run's review reports findings, they can go back to agy to fix (written to `plans/fixes/<slug>.md`), and that run gets reviewed too. Ships two skills: `plan-handoff` writes the plan with a recommended implementer, and `plan-diff-review` checks the result against it.
 
 Needs `agy` on `PATH` for agy handoffs, and a Jules API key for Jules handoffs, stored in the macOS Keychain:
 

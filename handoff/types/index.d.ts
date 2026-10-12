@@ -33,6 +33,22 @@ export type Run = {
   changedFiles: number
   // agy's pid, which is also its process group; kept here so a reload can still stop what it left running.
   pid: number | null
+  // Relative to root; set when this run worked from a review's findings rather than the plan.
+  fixesPath: string | null
+}
+
+// The part of a ReportFindings finding the fixes file needs.
+export type Finding = {
+  file: string
+  line?: number
+  summary: string
+  failure_scenario: string
+  category?: string
+}
+
+export type Review = {
+  // Null while a handoff review is waiting for its ReportFindings call.
+  findings: Finding[] | null
 }
 
 export type JulesJob = {
@@ -59,6 +75,7 @@ declare module 'claude-code' {
     handoff: {
       plan: Plan | null
       run: Run | null
+      review: Review | null
       isBandHidden: boolean
       julesJobs: JulesJob[]
     }

@@ -2,6 +2,6 @@
   "name": "handoff",
   "version": "0.1.0",
   "author": { "name": "David DeCorso" },
-  "description": "Hands a plans/<slug>.md plan to agy (headless with live progress, or copied for agy -i) or Jules (cloud PR), and starts a plan-diff-review when it's done",
+  "description": "Hands a plans/<slug>.md plan to agy (headless with live progress, or copied for agy -i) or Jules (cloud PR), and starts a plan-diff-review when it's done; the review's findings can go back to agy to fix",
   "types": "./types/index.d.ts"
 }
