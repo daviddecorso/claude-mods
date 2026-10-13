@@ -30,6 +30,10 @@ export function firstLineOf(body: string): string {
   return (body.split('\n', 1)[0] ?? '').trim()
 }
 
+export function anchorOf(body: string): string {
+  return firstLineOf(body).toLowerCase().replace(/\s+/g, ' ').slice(0, 30)
+}
+
 export function toItem(file: string, body: string): QueueItem {
   const [, rest = ''] = /^[^\n]*\n?([\s\S]*)$/.exec(body) ?? []
   return {
@@ -44,9 +48,24 @@ export function joinBatch(bodies: readonly string[]): string {
   return bodies.map(body => body.trimEnd()).join(BATCH_SEPARATOR)
 }
 
-// Items whose first line survived the person's edits, so deleting one from the draft keeps it queued.
+// Items whose anchor survived the person's edits, so deleting one from the draft keeps it queued.
 export function keptItems(submitted: string, pending: readonly PendingItem[]): string[] {
-  return pending.filter(item => item.firstLine && submitted.includes(item.firstLine)).map(item => item.file)
+  const normalized = submitted.toLowerCase().replace(/\s+/g, ' ')
+  return pending.filter(item => item.anchor && normalized.includes(item.anchor)).map(item => item.file)
+}
+
+export function seqsToFiles(args: readonly string[] | string, items: readonly QueueItem[]): string[] {
+  const tokens = typeof args === 'string' ? args.trim().split(/\s+/).filter(Boolean) : args
+  const files: string[] = []
+  for (const token of tokens) {
+    if (!token) continue
+    const seq = token.padStart(3, '0')
+    const match = items.find(item => item.seq === seq)
+    if (match && !files.includes(match.file)) {
+      files.push(match.file)
+    }
+  }
+  return files
 }
 
 export function truncate(text: string, width: number): string {

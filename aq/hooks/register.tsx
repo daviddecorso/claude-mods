@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { PendingItem, QueueItem } from '../types'
-import { ITEM_FILE, firstLineOf, joinBatch, keptItems, nextSeq, slugify, toItem, truncate } from './queue'
+import { ITEM_FILE, anchorOf, joinBatch, keptItems, nextSeq, seqsToFiles, slugify, toItem, truncate } from './queue'
 
 type $ = EngineInterface
 
@@ -108,7 +108,7 @@ async function fillSelected($: $) {
   for (const item of queued) {
     const body = await $.fs.read(`${queueDir}/${item.file}`)
     bodies.push(body)
-    nextPending.push({ file: item.file, firstLine: firstLineOf(body) })
+    nextPending.push({ file: item.file, anchor: anchorOf(body) })
   }
 
   const filled = await $.prompt.fill({ text: joinBatch(bodies), mode: 'replace' })
@@ -148,7 +148,7 @@ export const register: Register = on => {
     await $.command.register({
       name: 'aq',
       description: 'Prompt queue: open the picker, list, or add <text> (no text queues the prompt box draft)',
-      argumentHint: '[ls | add [text]]',
+      argumentHint: '[ls | add [text] | done <seq…>]',
     })
     await $.tool.register({
       name: 'aq_add',
@@ -211,7 +211,17 @@ export const register: Register = on => {
         return { text: `aq: ${(error as Error).message}` }
       }
     }
-    if (verb) return { text: 'Usage: /aq [ls | add [text]]' }
+    if (verb === 'done' || verb === 'rm') {
+      const rest = args.slice(verb.length).trim()
+      if (!rest) return { text: 'Usage: /aq done <seq…>' }
+      const queued = await refresh($)
+      if (!queueDir) return { text: 'Not inside a git repo.' }
+      const files = seqsToFiles(rest, queued)
+      if (files.length === 0) return { text: 'No matching items.' }
+      await archive($, files)
+      return { text: `Archived ${files.join(', ')}` }
+    }
+    if (verb) return { text: 'Usage: /aq [ls | add [text] | done <seq…>]' }
 
     await openPane($)
     return { text: queueDir ? 'aq picker opened.' : 'Not inside a git repo.' }
@@ -244,6 +254,12 @@ export const register: Register = on => {
       void update($, selected, list => (list.includes(file) ? list.filter(f => f !== file) : [...list, file]))
     const toggleAll = () =>
       void update($, selected, list => (list.length === queued.length ? [] : queued.map(item => item.file)))
+    const archiveSelected = async () => {
+      const count = picked.length
+      await archive($, picked)
+      await update($, selected, () => [])
+      $.ui.toast(`Archived ${count}`)
+    }
     const addDraft = async () => $.ui.toast(await queueDraft($).catch(error => `aq: ${(error as Error).message}`))
 
     if (!name) return <Text dimColor>Not inside a git repo.</Text>
@@ -274,6 +290,14 @@ export const register: Register = on => {
             variant="primary"
             onPress={() => void fillSelected($)}
           />
+          {picked.length > 0 && (
+            <Button
+              key="done"
+              label={`Done (${picked.length})`}
+              hotkey="x"
+              onPress={() => void archiveSelected()}
+            />
+          )}
           {queued.length > 0 && (
             <Button
               key="all"

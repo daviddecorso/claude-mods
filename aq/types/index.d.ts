@@ -7,7 +7,7 @@ export type QueueItem = {
 
 export type PendingItem = {
   file: string
-  firstLine: string
+  anchor: string
 }
 
 declare module 'claude-code' {

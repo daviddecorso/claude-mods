@@ -48,7 +48,7 @@ security add-generic-password -s jules-api -a "$USER" -w
 
 ## aq
 
-A pane for a per-repo prompt queue kept in `<repo>/.queue/` (shared across worktrees): pick queued prompts, batch them into the prompt box, and queue drafts. Also gives the model an `aq_add` tool to queue follow-ups. Pairs with the `aq` CLI from [zsh-utils](https://github.com/daviddecorso/zsh-utils), which reads and writes the same queue.
+A pane for a per-repo prompt queue kept in `<repo>/.queue/` (shared across worktrees): pick queued prompts, batch them into the prompt box, queue drafts, and archive items with the `x` hotkey or `/aq done <seq…>`. Also gives the model an `aq_add` tool to queue follow-ups. Pairs with the `aq` CLI from [zsh-utils](https://github.com/daviddecorso/zsh-utils), which reads and writes the same queue.
 
 ```
 /plugin install aq --marketplace daviddecorso/claude-mods
