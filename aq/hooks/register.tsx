@@ -30,7 +30,7 @@ async function logEvent($: $, event: Record<string, unknown>) {
 }
 
 function text(body: string, isError = false) {
-  return { result: { content: [{ type: 'text' as const, text: body }], isError } }
+  return isError ? { result: body, isError: true as const } : { result: body }
 }
 
 // Same rule as the zsh `aq`: the queue sits beside the git common dir, so worktrees share it.

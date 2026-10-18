@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect, mock, test } from 'claude-code/testing'
+import type { On } from 'claude-code'
 
 import { anchorOf, joinBatch, keptItems, nextSeq, seqsToFiles, slugify, toItem, truncate } from '../hooks/queue'
 
@@ -105,3 +106,60 @@ describe('truncate', () => {
     expect(truncate('abc', 4)).toBe('abc')
   })
 })
+
+const ROOT = '/repo'
+
+function ran(exitCode: number, stdout = '') {
+  return { value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+}
+
+function fakeRepo(on: On) {
+  const files = new Map<string, string>()
+  mock.env(on, { HOME: '/home/me' })
+  on('session.id', async () => ({ value: 'sess-1' }))
+  on('session.start', async (_$, e) => ({ cwd: e.cwd }))
+  on('session.cwd', async () => ({ value: ROOT }))
+  on('command.register', async (_$, e) => ({ value: { command: e.name } }))
+  on('tool.register', async (_$, e) => ({ value: { tool: `mcp__aq__${e.name}` } }))
+  on('fs.exists', async (_$, e) => ({ value: e.path === `${ROOT}/.queue` || files.has(e.path.replace(`${ROOT}/.queue/`, '')) }))
+  on('fs.list', async (_$, e) => ({
+    value:
+      e.path === `${ROOT}/.queue`
+        ? [...files.keys()].map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: 0, isLink: false }))
+        : [],
+  }))
+  on('fs.read', async (_$, e) => ({ value: files.get(e.path.replace(`${ROOT}/.queue/`, '')) ?? '' }))
+  on('fs.write', async (_$, e) => {
+    files.set(e.path.replace(`${ROOT}/.queue/`, ''), e.text)
+    return { value: undefined } as never
+  })
+  on('process.run', async (_$, e) => {
+    const [bin, ...args] = e.argv
+    if (bin === '/bin/sh' && e.argv.at(-1)!.endsWith('/mod-logs/aq.jsonl')) return ran(0)
+    if (bin === 'git' && args.includes('--git-common-dir')) return ran(0, `${ROOT}/.git\n`)
+    return ran(0)
+  })
+}
+
+describe('aq_add tool.call', () => {
+  test('returns a string result rather than nested content blocks', async ($, on) => {
+    fakeRepo(on)
+    await $.session.start({ cwd: ROOT, surface: null, isInteractive: true })
+
+    const res = await $.tool.call({ tool: 'mcp__aq__aq_add', text: 'fix the login redirect loop' } as never)
+    expect(res).toEqual({ result: 'Queued 001-fix-the-login-redirect-loop.md' })
+    expect(typeof res.result).toBe('string')
+    expect(res.isError).toBeUndefined()
+  })
+
+  test('returns isError next to result on failure', async ($, on) => {
+    fakeRepo(on)
+    await $.session.start({ cwd: ROOT, surface: null, isInteractive: true })
+
+    const res = await $.tool.call({ tool: 'mcp__aq__aq_add', text: '   ' } as never)
+    expect(res).toEqual({ result: 'aq_add failed: nothing to queue', isError: true })
+    expect(typeof res.result).toBe('string')
+    expect(res.isError).toBe(true)
+  })
+})
+
