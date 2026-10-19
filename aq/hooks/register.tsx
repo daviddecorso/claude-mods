@@ -223,6 +223,11 @@ export const register: Register = on => {
     }
     if (verb) return { text: 'Usage: /aq [ls | add [text] | done <seq…>]' }
 
+    if ((await $.ui.panes()).some(pane => pane.id === PANE)) {
+      await $.ui.close({ id: PANE })
+      return { text: 'aq picker closed.' }
+    }
+
     await openPane($)
     return { text: queueDir ? 'aq picker opened.' : 'Not inside a git repo.' }
   })

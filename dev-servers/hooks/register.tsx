@@ -503,6 +503,12 @@ export const register: Register = on => {
     if (verb === 'start') return { text: await start($, name) }
     if (verb === 'stop') return { text: await stop($, name) }
     if (verb === 'restart') return { text: await restart($, name) }
+    if (verb) return { text: 'Usage: /dev [rescan | add <name> <dir> <command> | start <name> | stop <name> | restart <name>]' }
+
+    if ((await $.ui.panes()).some(pane => pane.id === PANE)) {
+      await $.ui.close({ id: PANE })
+      return { text: 'Dev servers pane closed.' }
+    }
 
     await $.ui.open({ id: PANE, title: 'Dev servers' })
     return { text: defs.size > 0 ? 'Dev servers pane opened.' : 'No dev servers found in this repo.' }
